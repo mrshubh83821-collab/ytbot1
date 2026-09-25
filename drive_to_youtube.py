@@ -8,9 +8,9 @@ through chalane ke liye banaya gaya hai.
 import os
 import io
 import json
-import time
+import subprocess
 
-import google.generativeai as genai
+from groq import Groq
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -22,7 +22,7 @@ CLIENT_SECRET = os.environ["CLIENT_SECRET"]
 REFRESH_TOKEN = os.environ["REFRESH_TOKEN"]
 DRIVE_FOLDER_ID = os.environ["DRIVE_FOLDER_ID"]             # jahan se videos uthani hain
 UPLOADED_FOLDER_ID = os.environ.get("UPLOADED_FOLDER_ID")   # optional: upload hone ke baad yahan move
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")            # AI se title/hashtags banwane ke liye
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")                # AI se title/hashtags banwane ke liye (free, Groq)
 
 PRIVACY_STATUS = "public"   # "public" / "unlisted" / "private" me se koi ek
 
@@ -71,40 +71,60 @@ def download_file(drive, file_id, file_name):
     return local_path
 
 
+def extract_audio(video_path):
+    """ffmpeg se video ka audio nikal kar mp3 banao (Whisper ke liye)."""
+    audio_path = video_path.rsplit(".", 1)[0] + ".mp3"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libmp3lame", audio_path],
+        check=True, capture_output=True,
+    )
+    return audio_path
+
+
 def generate_title_and_hashtags(video_path):
     """
-    Gemini AI ko video bhejo, wo dekh kar catchy title, description
-    aur hashtags bana kar deta hai. Agar GEMINI_API_KEY nahi hai ya
-    kuch error aaya, to None return hota hai (filename fallback use hoga).
+    Groq (free, no card) se video ka title/hashtags banwao:
+    1) Video ka audio nikal kar Whisper se "sunkar" text banao
+    2) Us text (ya khaali ho to sirf filename) ke basis pe Llama se
+       catchy title + description + hashtags likhwao
+    Agar GROQ_API_KEY nahi hai ya kuch error aaya, None return hota
+    hai (filename fallback use hoga).
     """
-    if not GEMINI_API_KEY:
+    if not GROQ_API_KEY:
         return None
 
-    print(f"[debug] key length: {len(GEMINI_API_KEY)} | starts: {GEMINI_API_KEY[:6]} | ends: {GEMINI_API_KEY[-4:]}")
-
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        video_file = genai.upload_file(path=video_path)
+        client = Groq(api_key=GROQ_API_KEY)
 
-        # Gemini file ko process karne me kuch second lagte hain
-        while video_file.state.name == "PROCESSING":
-            time.sleep(3)
-            video_file = genai.get_file(video_file.name)
+        transcript_text = ""
+        try:
+            audio_path = extract_audio(video_path)
+            with open(audio_path, "rb") as f:
+                transcription = client.audio.transcriptions.create(
+                    file=f, model="whisper-large-v3"
+                )
+            transcript_text = (transcription.text or "").strip()
+            os.remove(audio_path)
+        except Exception as e:
+            print(f"Audio transcribe skip hua (shayad silent video hai): {e}")
 
-        model = genai.GenerativeModel("gemini-3.5-flash")
         prompt = (
-            "Ye ek YouTube Short video hai. Poora video dekho aur ek "
-            "catchy, click-worthy YouTube title (max 90 characters), "
-            "ek 1-2 line description, aur reach/discovery ke liye 8-10 "
-            "relevant trending hashtags suggest karo (video ke content, "
-            "niche aur general viral tags dono mix karke, jaise #shorts "
-            "#viral #trending ke saath content-specific tags). SIRF is "
-            'JSON format me jawab do, kuch aur text mat likho: '
+            "Ye ek YouTube Short video hai. Iska audio transcript (agar "
+            f'available hai): "{transcript_text[:800]}"\n\n'
+            "Isi info ke aadhar par (agar transcript khaali hai to bhi "
+            "generic-par-catchy) ek click-worthy YouTube title (max 90 "
+            "characters), ek 1-2 line description, aur reach/discovery "
+            "ke liye 8-10 relevant hashtags do (content-specific + "
+            "#shorts #viral #trending jaise general tags mix karke). "
+            "SIRF is JSON format me jawab do, kuch aur text mat likho: "
             '{"title": "...", "description": "...", '
             '"hashtags": ["#tag1", "#tag2", "..."]}'
         )
-        response = model.generate_content([video_file, prompt])
-        text = response.text.strip()
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = completion.choices[0].message.content.strip()
         text = text.strip("`").replace("json", "", 1).strip()
         return json.loads(text)
     except Exception as e:
