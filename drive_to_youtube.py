@@ -80,6 +80,8 @@ def generate_title_and_hashtags(video_path):
     if not GEMINI_API_KEY:
         return None
 
+    print(f"[debug] key length: {len(GEMINI_API_KEY)} | starts: {GEMINI_API_KEY[:6]} | ends: {GEMINI_API_KEY[-4:]}")
+
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         video_file = genai.upload_file(path=video_path)
