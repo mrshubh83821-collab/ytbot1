@@ -89,14 +89,17 @@ def generate_title_and_hashtags(video_path):
             time.sleep(3)
             video_file = genai.get_file(video_file.name)
 
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash")
         prompt = (
             "Ye ek YouTube Short video hai. Poora video dekho aur ek "
             "catchy, click-worthy YouTube title (max 90 characters), "
-            "ek chhoti 1-2 line description, aur 5 relevant hashtags "
-            "suggest karo. SIRF is JSON format me jawab do, kuch aur "
-            'text mat likho: {"title": "...", "description": "...", '
-            '"hashtags": ["#tag1", "#tag2"]}'
+            "ek 1-2 line description, aur reach/discovery ke liye 8-10 "
+            "relevant trending hashtags suggest karo (video ke content, "
+            "niche aur general viral tags dono mix karke, jaise #shorts "
+            "#viral #trending ke saath content-specific tags). SIRF is "
+            'JSON format me jawab do, kuch aur text mat likho: '
+            '{"title": "...", "description": "...", '
+            '"hashtags": ["#tag1", "#tag2", "..."]}'
         )
         response = model.generate_content([video_file, prompt])
         text = response.text.strip()
@@ -117,12 +120,12 @@ def safe_title(raw_title: str) -> str:
     return cleaned
 
 
-def upload_to_youtube(youtube, video_path, title, description):
+def upload_to_youtube(youtube, video_path, title, description, tags):
     body = {
         "snippet": {
             "title": title,
             "description": description,
-            "tags": ["shorts"],
+            "tags": tags,
             "categoryId": "22",
         },
         "status": {
@@ -168,15 +171,18 @@ def main():
 
     ai_result = generate_title_and_hashtags(local_path)
     if ai_result:
-        hashtags = " ".join(ai_result.get("hashtags", ["#shorts"]))
+        hashtags = ai_result.get("hashtags", ["#shorts"])
         title = safe_title(ai_result.get("title", ""))
-        description = ai_result.get("description", "") + "\n\n" + hashtags
+        description = ai_result.get("description", "") + "\n\n" + " ".join(hashtags)
+        tags = list({h.lstrip("#").strip() for h in hashtags if h.strip("#").strip()})
         print(f"AI title: {title}")
     else:
         title = safe_title(os.path.splitext(video["name"])[0] + " #shorts")
-        description = "Automatically uploaded via GitHub Actions bot. #shorts"
+        default_hashtags = ["#shorts", "#viral", "#trending", "#reels", "#fyp", "#shortvideo"]
+        description = "Automatically uploaded via GitHub Actions bot.\n\n" + " ".join(default_hashtags)
+        tags = [h.lstrip("#") for h in default_hashtags]
 
-    upload_to_youtube(youtube, local_path, title, description)
+    upload_to_youtube(youtube, local_path, title, description, tags)
     mark_as_done(drive, video["id"], ",".join(video.get("parents", [])))
     os.remove(local_path)
 
