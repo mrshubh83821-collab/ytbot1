@@ -1,0 +1,128 @@
+"""
+drive_to_youtube.py
+Google Drive ke ek folder se sabse purani pending video uthaकर
+YouTube par upload karta hai. GitHub Actions (daily cron) ke
+through chalane ke liye banaya gaya hai.
+"""
+
+import os
+import io
+
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+
+# ---------- Secrets / Config (GitHub Actions "Secrets" se aayenge) ----------
+CLIENT_ID = os.environ["CLIENT_ID"]
+CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+REFRESH_TOKEN = os.environ["REFRESH_TOKEN"]
+DRIVE_FOLDER_ID = os.environ["DRIVE_FOLDER_ID"]             # jahan se videos uthani hain
+UPLOADED_FOLDER_ID = os.environ.get("UPLOADED_FOLDER_ID")   # optional: upload hone ke baad yahan move
+
+PRIVACY_STATUS = "public"   # "public" / "unlisted" / "private" me se koi ek
+
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+def get_credentials():
+    creds = Credentials(
+        token=None,
+        refresh_token=REFRESH_TOKEN,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+    return creds
+
+
+def get_next_video(drive):
+    """DRIVE_FOLDER_ID me sabse purani pending video file dhoondo."""
+    query = f"'{DRIVE_FOLDER_ID}' in parents and mimeType contains 'video/' and trashed = false"
+    result = drive.files().list(
+        q=query,
+        orderBy="createdTime",
+        fields="files(id, name, parents)",
+        pageSize=5,
+    ).execute()
+    files = result.get("files", [])
+    return files[0] if files else None
+
+
+def download_file(drive, file_id, file_name):
+    local_path = f"/tmp/{file_name}"
+    request = drive.files().get_media(fileId=file_id)
+    with io.FileIO(local_path, "wb") as fh:
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            pct = int(status.progress() * 100) if status else 0
+            print(f"Download: {pct}%")
+    return local_path
+
+
+def upload_to_youtube(youtube, video_path, title, description):
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": ["shorts"],
+            "categoryId": "22",
+        },
+        "status": {
+            "privacyStatus": PRIVACY_STATUS,
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Upload: {int(status.progress() * 100)}%")
+    print(f"Uploaded! Video ID: {response['id']}")
+
+
+def mark_as_done(drive, file_id, previous_parents):
+    """Upload ke baad file ko 'Uploaded' folder me move kar do, warna delete kar do."""
+    if UPLOADED_FOLDER_ID:
+        drive.files().update(
+            fileId=file_id,
+            addParents=UPLOADED_FOLDER_ID,
+            removeParents=previous_parents,
+            fields="id, parents",
+        ).execute()
+    else:
+        drive.files().delete(fileId=file_id).execute()
+
+
+def main():
+    creds = get_credentials()
+    drive = build("drive", "v3", credentials=creds)
+    youtube = build("youtube", "v3", credentials=creds)
+
+    video = get_next_video(drive)
+    if not video:
+        print("Folder me koi nayi video nahi mili, aaj skip ho gaya.")
+        return
+
+    print(f"Processing: {video['name']}")
+    local_path = download_file(drive, video["id"], video["name"])
+
+    title = os.path.splitext(video["name"])[0][:95] + " #shorts"
+    description = "Automatically uploaded via GitHub Actions bot. #shorts"
+
+    upload_to_youtube(youtube, local_path, title, description)
+    mark_as_done(drive, video["id"], ",".join(video.get("parents", [])))
+    os.remove(local_path)
+
+
+if __name__ == "__main__":
+    main()
