@@ -107,6 +107,16 @@ def generate_title_and_hashtags(video_path):
         return None
 
 
+def safe_title(raw_title: str) -> str:
+    """YouTube title max 100 chars ki hoti hai aur khaali nahi ho sakti."""
+    cleaned = (raw_title or "").replace("<", "").replace(">", "").strip()
+    if not cleaned:
+        cleaned = "Short Video"
+    if len(cleaned) > 100:
+        cleaned = cleaned[:97].strip() + "..."
+    return cleaned
+
+
 def upload_to_youtube(youtube, video_path, title, description):
     body = {
         "snippet": {
@@ -158,12 +168,12 @@ def main():
 
     ai_result = generate_title_and_hashtags(local_path)
     if ai_result:
-        title = ai_result["title"][:95]
         hashtags = " ".join(ai_result.get("hashtags", ["#shorts"]))
+        title = safe_title(ai_result.get("title", ""))
         description = ai_result.get("description", "") + "\n\n" + hashtags
         print(f"AI title: {title}")
     else:
-        title = os.path.splitext(video["name"])[0][:95] + " #shorts"
+        title = safe_title(os.path.splitext(video["name"])[0] + " #shorts")
         description = "Automatically uploaded via GitHub Actions bot. #shorts"
 
     upload_to_youtube(youtube, local_path, title, description)
