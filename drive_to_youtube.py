@@ -7,7 +7,10 @@ through chalane ke liye banaya gaya hai.
 
 import os
 import io
+import json
+import time
 
+import google.generativeai as genai
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -19,6 +22,7 @@ CLIENT_SECRET = os.environ["CLIENT_SECRET"]
 REFRESH_TOKEN = os.environ["REFRESH_TOKEN"]
 DRIVE_FOLDER_ID = os.environ["DRIVE_FOLDER_ID"]             # jahan se videos uthani hain
 UPLOADED_FOLDER_ID = os.environ.get("UPLOADED_FOLDER_ID")   # optional: upload hone ke baad yahan move
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")            # AI se title/hashtags banwane ke liye
 
 PRIVACY_STATUS = "public"   # "public" / "unlisted" / "private" me se koi ek
 
@@ -65,6 +69,42 @@ def download_file(drive, file_id, file_name):
             pct = int(status.progress() * 100) if status else 0
             print(f"Download: {pct}%")
     return local_path
+
+
+def generate_title_and_hashtags(video_path):
+    """
+    Gemini AI ko video bhejo, wo dekh kar catchy title, description
+    aur hashtags bana kar deta hai. Agar GEMINI_API_KEY nahi hai ya
+    kuch error aaya, to None return hota hai (filename fallback use hoga).
+    """
+    if not GEMINI_API_KEY:
+        return None
+
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        video_file = genai.upload_file(path=video_path)
+
+        # Gemini file ko process karne me kuch second lagte hain
+        while video_file.state.name == "PROCESSING":
+            time.sleep(3)
+            video_file = genai.get_file(video_file.name)
+
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        prompt = (
+            "Ye ek YouTube Short video hai. Poora video dekho aur ek "
+            "catchy, click-worthy YouTube title (max 90 characters), "
+            "ek chhoti 1-2 line description, aur 5 relevant hashtags "
+            "suggest karo. SIRF is JSON format me jawab do, kuch aur "
+            'text mat likho: {"title": "...", "description": "...", '
+            '"hashtags": ["#tag1", "#tag2"]}'
+        )
+        response = model.generate_content([video_file, prompt])
+        text = response.text.strip()
+        text = text.strip("`").replace("json", "", 1).strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"AI title generation fail hui, filename use kar rahe hain: {e}")
+        return None
 
 
 def upload_to_youtube(youtube, video_path, title, description):
@@ -116,8 +156,15 @@ def main():
     print(f"Processing: {video['name']}")
     local_path = download_file(drive, video["id"], video["name"])
 
-    title = os.path.splitext(video["name"])[0][:95] + " #shorts"
-    description = "Automatically uploaded via GitHub Actions bot. #shorts"
+    ai_result = generate_title_and_hashtags(local_path)
+    if ai_result:
+        title = ai_result["title"][:95]
+        hashtags = " ".join(ai_result.get("hashtags", ["#shorts"]))
+        description = ai_result.get("description", "") + "\n\n" + hashtags
+        print(f"AI title: {title}")
+    else:
+        title = os.path.splitext(video["name"])[0][:95] + " #shorts"
+        description = "Automatically uploaded via GitHub Actions bot. #shorts"
 
     upload_to_youtube(youtube, local_path, title, description)
     mark_as_done(drive, video["id"], ",".join(video.get("parents", [])))
