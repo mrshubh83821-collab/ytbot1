@@ -26,6 +26,37 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")                # AI se title/hasht
 
 PRIVACY_STATUS = "public"   # "public" / "unlisted" / "private" me se koi ek
 
+# Ye tags HAMESHA lagenge, AI kuch bhi bole - reach/discovery badhane ke liye.
+BASE_TAGS = [
+    "shorts", "viral", "trending", "reels", "fyp", "foryou", "foryoupage",
+    "viralvideo", "shortsvideo", "trendingvideo", "explorepage", "instareels",
+    "reelsvideo", "viralreels", "shortsfeed", "youtubeshorts", "shortsyoutube",
+    "viralshorts", "explore", "trending2026",
+]
+
+
+def combine_tags(extra_hashtags):
+    """
+    AI (ya kuch bhi) se mile hashtags + hamesha wale BASE_TAGS ko milakar
+    ek duplicate-free list banao. YouTube tags field ki ~500 character
+    limit ka bhi khayal rakhte hain.
+    """
+    cleaned_extra = [h.lstrip("#").strip() for h in extra_hashtags if h.strip("#").strip()]
+    combined, seen = [], set()
+    for tag in cleaned_extra + BASE_TAGS:
+        key = tag.lower()
+        if key and key not in seen:
+            seen.add(key)
+            combined.append(tag)
+
+    final_tags, total_len = [], 0
+    for tag in combined:
+        total_len += len(tag) + 1
+        if total_len > 480:
+            break
+        final_tags.append(tag)
+    return final_tags
+
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/drive",
@@ -197,16 +228,16 @@ def main():
 
     ai_result = generate_title_and_hashtags(local_path)
     if ai_result:
-        hashtags = ai_result.get("hashtags", ["#shorts"])
         title = safe_title(ai_result.get("title", ""))
-        description = ai_result.get("description", "") + "\n\n" + " ".join(hashtags)
-        tags = list({h.lstrip("#").strip() for h in hashtags if h.strip("#").strip()})
+        tags = [f"#{t}" for t in combine_tags(ai_result.get("hashtags", []))]
+        hashtag_line = " ".join(tags)
+        description = (ai_result.get("description", "") + "\n\n" + hashtag_line).strip()
         print(f"AI title: {title}")
     else:
         title = safe_title(os.path.splitext(video["name"])[0] + " #shorts")
-        default_hashtags = ["#shorts", "#viral", "#trending", "#reels", "#fyp", "#shortvideo"]
-        description = "Automatically uploaded via GitHub Actions bot.\n\n" + " ".join(default_hashtags)
-        tags = [h.lstrip("#") for h in default_hashtags]
+        tags = [f"#{t}" for t in combine_tags([])]
+        hashtag_line = " ".join(tags)
+        description = ("Automatically uploaded via GitHub Actions bot.\n\n" + hashtag_line).strip()
 
     upload_to_youtube(youtube, local_path, title, description, tags)
     mark_as_done(drive, video["id"], ",".join(video.get("parents", [])))
