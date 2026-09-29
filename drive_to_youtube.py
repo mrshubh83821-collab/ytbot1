@@ -59,7 +59,11 @@ def get_next_video(drive):
 
 
 def download_file(drive, file_id, file_name):
-    local_path = f"/tmp/{file_name}"
+    # Drive file names kabhi-kabhi bahut lambe (poori caption jaisi) hote hain,
+    # jo local filesystem par crash kar sakte hain. Isliye local file ka naam
+    # hamesha safe file_id + extension se banate hain, original naam se nahi.
+    ext = os.path.splitext(file_name)[1] or ".mp4"
+    local_path = f"/tmp/{file_id}{ext}"
     request = drive.files().get_media(fileId=file_id)
     with io.FileIO(local_path, "wb") as fh:
         downloader = MediaIoBaseDownload(fh, request)
