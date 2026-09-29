@@ -3,6 +3,7 @@ name: Upload Short to YouTube
 on:
   schedule:
     - cron: "30 14 * * *"   # Roz raat 8:00 PM IST (= 2:30 PM UTC)
+    - cron: "30 2 * * *"    # Roz subah 8:00 AM IST (= 2:30 AM UTC)
   workflow_dispatch: {}      # Manual testing ke liye ("Run workflow" button se)
 
 jobs:
